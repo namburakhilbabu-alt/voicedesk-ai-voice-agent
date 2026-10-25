@@ -6,6 +6,7 @@ Run:  .venv/bin/python tests/test_flow.py
 """
 
 import asyncio
+import html
 import os
 import sys
 from pathlib import Path
@@ -139,9 +140,16 @@ async def main():
         check("in a few seconds" in msg and "vd-steps" in msg, "tracker: call scheduled")
 
         placed = []
-        phone.place_call = lambda row: placed.append(row["phone"]) or "CA1"  # fake Twilio
+
+        class FakeTwilio:  # stands in for twilio.rest.Client
+            def __init__(self, *_):
+                self.calls = NS(create=lambda **kw: placed.append(kw) or NS(sid="CA1"))
+
+        phone.Client = FakeTwilio
         await phone.place_due_calls()
-        check(placed == ["+919812345678"], "scheduler rings the customer")
+        check(len(placed) == 1 and placed[0]["to"] == "+919812345678", "scheduler rings the customer")
+        check(placed[0]["time_limit"] == 240 and placed[0]["url"].startswith("https://demo.example.com/twilio/answer"),
+              "Twilio gets the 4-minute call cap and our webhook URL")
         check("ringing" in webapp.track_request(req_id), "tracker: phone ringing")
 
         print("\nPhone call (Twilio webhooks)")
@@ -189,6 +197,36 @@ async def main():
             check(r.status_code == 200 and r.json()["phone_calls"] is True, f"/health → {r.json()}")
             r = await client.get("/")
             check(r.status_code == 200 and "gradio" in r.text.lower(), "web page served at /")
+
+        print("\nDemo limits (protect your API bill)")
+        visitor = lambda ip: NS(headers={"x-forwarded-for": ip}, client=NS(host="10.0.0.1"))  # noqa: E731
+        for _ in range(2):
+            db.record_usage("local", "browser_call")  # "local" already made 1 browser call above
+        *_, status, _ = await webapp.start_browser_call("Priya", "", "", "", None)
+        check("used today's demo calls" in status, "4th browser call from the same visitor is blocked")
+        fake.messages.script = booking_call_script()[:1]
+        sid, *_ = await webapp.start_browser_call("Ravi", "", "", "", None, visitor("5.6.7.8"))
+        check(sid is not None, "a different visitor can still call")
+        check(webapp.visitor_id(visitor("5.6.7.8")) != webapp.visitor_id(visitor("9.9.9.9"))
+              and "5.6.7.8" not in webapp.visitor_id(visitor("5.6.7.8")), "visitors told apart by hashed IP")
+        await webapp.end_browser_call(sid)
+
+        args = ("Priya", "9812345678", "", "Check-up", "As soon as possible", True)
+        req, _ = await webapp.request_phone_call(*args, visitor("1.1.1.1"))
+        check(req is not None, "2nd call to the same number is allowed")
+        req, msg = await webapp.request_phone_call(*args, visitor("2.2.2.2"))
+        check(req is None and "already had today's demo calls" in html.unescape(msg), "3rd call to the same number is blocked")
+        req, msg = await webapp.request_phone_call("Asha", "9000000001", "", "Check-up", "As soon as possible", True)
+        check(req is not None, "visitor's 2nd phone request is allowed")
+        req, msg = await webapp.request_phone_call("Asha", "9000000002", "", "Check-up", "As soon as possible", True)
+        check(req is None and "used today's demo phone calls" in html.unescape(msg), "visitor's 3rd phone request is blocked")
+
+        conv = agent.Receptionist(webapp.toolbox, "browser", "Test", "+910000000000")
+        conv.turns = 13
+        fake.messages.script = []  # any Claude call would fail the test
+        reply = await conv.reply("x" * 5000)
+        check(conv.ended and "time limit" in reply, "runaway call is ended without another AI call")
+        check(len(conv.transcript[0]["text"]) == 500, "very long input is cut to 500 characters")
 
         inbox, bookings, calls, requests = webapp.dashboard()
         priya = next(b for b in bookings if b[2] == "Priya")

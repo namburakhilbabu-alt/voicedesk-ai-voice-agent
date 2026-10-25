@@ -4,6 +4,7 @@ Run:  python app.py   → open http://localhost:7860
 """
 
 import asyncio
+import hashlib
 import html
 import json
 import logging
@@ -54,6 +55,15 @@ def mask_phone(text: str) -> str:
     return re.sub(r"\+\d{4,}(\d{4})", lambda m: "+••••••" + m.group(1), text or "")
 
 
+def visitor_id(request: gr.Request | None) -> str:
+    """A short anonymous ID per visitor (a hash of their IP address), used for the per-visitor limits.
+    On Hugging Face the real IP is in the X-Forwarded-For header."""
+    if request is None:
+        return "local"
+    ip = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip() or getattr(request.client, "host", "")
+    return hashlib.sha256(f"voicedesk:{ip}".encode()).hexdigest()[:16]
+
+
 def clean_phone(raw: str) -> str:
     """'98765 43210' → '+919876543210'. Numbers with a country code are kept as they are."""
     digits = re.sub(r"[\s\-()]", "", raw or "")
@@ -102,15 +112,19 @@ ENDED = "⚪ **No active call.** Start one any time."
 
 # ---------------------------------------------------------------- call-back request (real phone)
 
-async def request_phone_call(name, phone_no, email, reason, when, consent):
+async def request_phone_call(name, phone_no, email, reason, when, consent, request: gr.Request = None):
     name, phone_no = (name or "").strip(), clean_phone(phone_no)
     if not name or not phone_no:
         return None, notice("Please enter your name and phone number.")
     if not consent:
         return None, notice("Please tick the consent box so we're allowed to call you.")
+    visitor = visitor_id(request)
+    if db.usage_today("phone_request", visitor) >= config.MAX_PHONE_CALLS_PER_VISITOR:
+        return None, notice("You've used today's demo phone calls. Try the browser call, or come back tomorrow.")
     ok, why = phone.can_call(phone_no)
     if not ok:
         return None, notice(why)
+    db.record_usage(visitor, "phone_request")
     at = db.now() + timedelta(minutes=WHEN[when])
     req_id = db.add_call_request(name, phone_no, (email or "").strip(), reason or "", at)
     return req_id, track_request(req_id)
@@ -148,13 +162,17 @@ def track_request(req_id):
 
 # ---------------------------------------------------------------- in-browser call
 
-async def start_browser_call(name, phone_no, email, reason, session_id):
+async def start_browser_call(name, phone_no, email, reason, session_id, request: gr.Request = None):
     if session_id in browser_calls:  # restart: close the previous call first
         await end_browser_call(session_id)
     if not (name or "").strip():
         return None, [], None, "⚠️ Please enter your name first (left side).", ""
-    if db.browser_calls_today() >= config.MAX_BROWSER_CALLS_PER_DAY:
+    visitor = visitor_id(request)
+    if db.usage_today("browser_call", visitor) >= config.MAX_BROWSER_CALLS_PER_VISITOR:
+        return None, [], None, "⚠️ You've used today's demo calls. Please come back tomorrow.", ""
+    if db.usage_today("browser_call") >= config.MAX_BROWSER_CALLS_PER_DAY:
         return None, [], None, "⚠️ Today's demo call limit is reached. Please try again tomorrow.", ""
+    db.record_usage(visitor, "browser_call")
     conv = Receptionist(toolbox, "browser", name.strip(), clean_phone(phone_no) or "not given",
                         (email or "").strip(), reason or "")
     try:
@@ -189,6 +207,8 @@ async def on_mic(audio_path, session_id):
         return gr.skip(), gr.skip(), gr.skip(), gr.skip(), None
     if not voice.stt_enabled():
         return gr.skip(), gr.skip(), "⚠️ Voice input needs a GROQ_API_KEY. Type your reply instead.", gr.skip(), None
+    if os.path.getsize(audio_path) > 10_000_000:  # roughly over a minute of audio
+        return gr.skip(), gr.skip(), "⚠️ That recording is too long. Please keep it under a minute.", gr.skip(), None
     try:
         text = await voice.transcribe(audio_path)
     except Exception as e:  # noqa: BLE001

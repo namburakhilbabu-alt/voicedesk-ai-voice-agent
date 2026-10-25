@@ -43,11 +43,16 @@ TELEGRAM_CHAT_ID = _env("TELEGRAM_CHAT_ID")
 # "interesting" = only calls the AI flags as worth the owner's time; "all" = every call
 OWNER_ALERTS = _env("OWNER_ALERTS", "interesting")
 
-# --- Safety limits for a public demo ---
-ALLOWED_PHONE_NUMBERS = {n.strip() for n in _env("ALLOWED_PHONE_NUMBERS").split(",") if n.strip()}
+# --- Safety limits for a public demo (they cap what visitors can spend on your keys) ---
+ALLOWED_PHONE_NUMBERS = {n.strip() for n in _env("ALLOWED_PHONE_NUMBERS").split(",") if n.strip()}  # empty = anyone
+MAX_BROWSER_CALLS_PER_DAY = int(_env("MAX_BROWSER_CALLS_PER_DAY", "30"))        # all visitors together
+MAX_BROWSER_CALLS_PER_VISITOR = int(_env("MAX_BROWSER_CALLS_PER_VISITOR", "3"))  # per visitor per day
 MAX_PHONE_CALLS_PER_DAY = int(_env("MAX_PHONE_CALLS_PER_DAY", "10"))
-MAX_BROWSER_CALLS_PER_DAY = int(_env("MAX_BROWSER_CALLS_PER_DAY", "50"))
+MAX_PHONE_CALLS_PER_VISITOR = int(_env("MAX_PHONE_CALLS_PER_VISITOR", "2"))
+MAX_CALLS_PER_NUMBER = int(_env("MAX_CALLS_PER_NUMBER", "2"))                    # same phone number per day
+MAX_CALL_SECONDS = int(_env("MAX_CALL_SECONDS", "240"))                          # Twilio hangs up after this
 MAX_TURNS_PER_CALL = int(_env("MAX_TURNS_PER_CALL", "12"))
+MAX_MESSAGE_CHARS = int(_env("MAX_MESSAGE_CHARS", "500"))                        # longer typed text is cut
 MAX_EMAILS_PER_HOUR = int(_env("MAX_EMAILS_PER_HOUR", "5"))
 
 DB_PATH = Path(_env("DB_PATH") or ROOT / "data" / "voicedesk.db")

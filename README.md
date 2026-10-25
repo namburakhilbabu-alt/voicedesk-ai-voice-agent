@@ -155,6 +155,7 @@ The **browser call** uses the same brain and wrap-up. Only the voice changes: Gr
 ├── notify.py         # Telegram and Gmail
 ├── config.py         # settings from .env
 ├── faq.md            # clinic knowledge the agent answers from
+├── Dockerfile        # container for Hugging Face Spaces or any Docker host
 └── tests/
     └── test_flow.py  # end-to-end test with a scripted Claude (no keys needed)
 ```
@@ -265,6 +266,21 @@ claude mcp add voicedesk -- /full/path/to/.venv/bin/python /full/path/to/mcp_ser
 ```
 Then ask: *"What bookings do I have tomorrow?"* or *"Summarize today's calls."*
 
+### 5. Deploy to Hugging Face Spaces (optional)
+
+A public Space gives you a shareable link and a permanent `PUBLIC_URL` for Twilio, so cloudflared isn't needed.
+
+1. On [huggingface.co](https://huggingface.co) → **New Space** → SDK **Docker** → **Blank** → hardware **CPU basic** (free).
+2. **Files → Upload files:** upload everything from this repo **except `README.md`**. The Space keeps its own
+   README, which holds its settings.
+3. **Settings → Variables and secrets:**
+   - Add every key from `.env.example` as a **Secret**, not a Variable (Variables are visible to everyone).
+   - Add `PUBLIC_URL` = `https://<your-username>-<space-name>.hf.space`
+   - Optionally tune the demo limits (`MAX_BROWSER_CALLS_PER_DAY`, `MAX_PHONE_CALLS_PER_DAY`, …) as Variables.
+4. The Space builds and starts on its own. Open it and request a call.
+
+Free Spaces sleep after a period of inactivity, and bookings reset when the Space restarts.
+
 <details>
 <summary><b>🛠️ Troubleshooting</b></summary>
 
@@ -295,15 +311,39 @@ v1 keeps things simple so the whole system is easy to follow. Planned upgrades:
 - [ ] **Calendar sync** with Google Calendar or the clinic's booking software
 - [ ] **Smarter RAG:** embeddings and a vector store instead of keyword search
 - [ ] **Multi-business setup:** one deployment serving many clinics, each with its own FAQ, hours, and owner
-- [ ] **Cloud deployment** with Docker, Postgres, and a hosted demo
+- [ ] **Phone number verification (OTP)** before the first call, so only the number's owner can request it
+- [ ] **Production storage and monitoring:** Postgres, persistent data, and call analytics
 - [ ] **Conversation quality evals:** scripted test calls scored automatically
 
-## 🔒 Responsible use
+## 🔒 Security and cost controls
 
-VoiceDesk asks for consent before calling, introduces Aria as an AI assistant, limits calls per day and turns per
-call, masks phone numbers on the dashboard, verifies every Twilio webhook signature, and keeps owner-only MCP
-tools away from the agent. A production deployment in India would also need a registered calling number, DLT
-registration, calling-hours limits, and DPDP Act compliance.
+A public demo runs on *your* API keys, so every visitor's call is billed to you. VoiceDesk caps that in the app:
+
+| Limit | Default | Setting |
+|---|---|---|
+| Browser calls, all visitors together | 30 per day | `MAX_BROWSER_CALLS_PER_DAY` |
+| Browser calls per visitor | 3 per day | `MAX_BROWSER_CALLS_PER_VISITOR` |
+| Phone calls, all visitors together | 10 per day | `MAX_PHONE_CALLS_PER_DAY` |
+| Phone calls per visitor | 2 per day | `MAX_PHONE_CALLS_PER_VISITOR` |
+| Calls to the same phone number | 2 per day | `MAX_CALLS_PER_NUMBER` |
+| Phone call length (Twilio hangs up) | 4 minutes | `MAX_CALL_SECONDS` |
+| Conversation turns per call | 12 | `MAX_TURNS_PER_CALL` |
+| Length of a typed message | 500 characters | `MAX_MESSAGE_CHARS` |
+| Confirmation emails | 5 per hour | `MAX_EMAILS_PER_HOUR` |
+| Numbers allowed to be called | anyone | `ALLOWED_PHONE_NUMBERS` |
+
+Visitors are told apart by a hash of their IP address; raw IPs are never stored. Every Twilio webhook is checked
+against Twilio's signature, phone numbers are masked on the dashboard, and owner-only MCP tools are kept away from
+the agent. Aria asks for consent before calling and introduces herself as an AI assistant.
+
+**Before you share a public link:**
+- Set a monthly **spend limit** in the Anthropic Console (for example $5). This is the hard cap on your AI bill.
+- Keep Twilio on a **prepaid balance with auto-recharge off**, and allow only the countries you need under
+  **Geo permissions**.
+- Store keys as **Secrets** on your host, never in the code or in public variables.
+
+A production deployment in India would also need a registered calling number with DLT registration,
+calling-hours limits, and DPDP Act compliance.
 
 ---
 

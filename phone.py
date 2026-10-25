@@ -34,6 +34,7 @@ CALL_PROBLEMS = {"no-answer": "No answer. We'll let the clinic know.", "busy": "
 
 
 def can_call(phone: str) -> tuple[bool, str]:
+    """Checked when a call-back is requested: setup, number format, and the demo's daily limits."""
     if not config.phone_calls_enabled():
         return False, "Phone calls are not set up on this demo (Twilio keys missing)."
     if not PHONE_RE.match(phone):
@@ -42,6 +43,8 @@ def can_call(phone: str) -> tuple[bool, str]:
         return False, "This demo can only call pre-approved numbers. Try the browser call instead."
     if db.call_requests_today() >= config.MAX_PHONE_CALLS_PER_DAY:
         return False, "Today's phone-call limit for this demo is reached. Try the browser call."
+    if db.call_requests_today(phone) >= config.MAX_CALLS_PER_NUMBER:
+        return False, "This number has already had today's demo calls. Try the browser call."
     return True, ""
 
 
@@ -54,7 +57,8 @@ def place_call(request_row) -> str:
         url=f"{config.PUBLIC_URL}/twilio/answer?req={request_row['id']}",
         status_callback=f"{config.PUBLIC_URL}/twilio/status?req={request_row['id']}",
         status_callback_event=["completed"],
-        timeout=30,
+        timeout=30,                         # stop ringing after 30 seconds
+        time_limit=config.MAX_CALL_SECONDS,  # hard cap on call length (and on Twilio cost)
     )
     return call.sid
 
@@ -62,9 +66,8 @@ def place_call(request_row) -> str:
 async def place_due_calls() -> None:
     """Ring every customer whose call-back time has come."""
     for r in db.due_call_requests():
-        ok, why = can_call(r["phone"])
-        if not ok:
-            db.set_call_request_status(r["id"], "failed", why)
+        if not config.phone_calls_enabled():  # limits were already checked when the call was requested
+            db.set_call_request_status(r["id"], "failed", "Phone calls are not set up on this demo.")
             continue
         try:
             sid = await asyncio.to_thread(place_call, r)

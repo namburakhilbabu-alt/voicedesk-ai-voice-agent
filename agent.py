@@ -154,8 +154,14 @@ class Receptionist:
         )
 
     async def reply(self, caller_text: str) -> str:
+        caller_text = caller_text[:config.MAX_MESSAGE_CHARS]  # very long input costs tokens
         self.transcript.append({"role": "caller", "text": caller_text})
         self.turns += 1
+        if self.turns > config.MAX_TURNS_PER_CALL + 1:  # Claude didn't wrap up: end it without another AI call
+            self.ended = True
+            reply = "We've reached the time limit for this call. Thank you, and goodbye!"
+            self.transcript.append({"role": "agent", "text": reply})
+            return reply
         if self.turns >= config.MAX_TURNS_PER_CALL:
             caller_text += "\n[Call time limit reached: wrap up politely in one sentence and use end_call.]"
         return await self._turn(caller_text)

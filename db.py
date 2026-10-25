@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS owner_inbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     priority TEXT, message TEXT, delivered_via TEXT, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    visitor TEXT, kind TEXT, created_at TEXT NOT NULL   -- kind: browser_call | phone_request
+);
 CREATE TABLE IF NOT EXISTS emails (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     to_addr TEXT, subject TEXT, created_at TEXT NOT NULL
@@ -174,11 +178,15 @@ def set_call_request_status(req_id: int, status: str, note: str = "") -> None:
         conn.execute("UPDATE call_requests SET status = ?, note = ? WHERE id = ?", (status, note, req_id))
 
 
-def call_requests_today() -> int:
+def call_requests_today(phone: str | None = None) -> int:
+    """Requests made today that weren't rejected (optionally for one phone number)."""
+    sql = "SELECT COUNT(*) FROM call_requests WHERE status != 'failed' AND created_at >= ?"
+    args = [now().date().isoformat()]
+    if phone:
+        sql += " AND phone = ?"
+        args.append(phone)
     with connect() as conn:
-        return conn.execute(
-            "SELECT COUNT(*) FROM call_requests WHERE status IN ('calling', 'in_call', 'done') AND created_at >= ?",
-            (now().date().isoformat(),)).fetchone()[0]
+        return conn.execute(sql, args).fetchone()[0]
 
 
 def recent_call_requests(limit: int = 20) -> list[sqlite3.Row]:
@@ -203,11 +211,22 @@ def call_for_request(req_id: int):
         return conn.execute("SELECT * FROM calls WHERE request_id = ? ORDER BY id DESC LIMIT 1", (req_id,)).fetchone()
 
 
-def browser_calls_today() -> int:
+# ---------- Usage per visitor (for the demo limits) ----------
+
+def record_usage(visitor: str, kind: str) -> None:
     with connect() as conn:
-        return conn.execute(
-            "SELECT COUNT(*) FROM calls WHERE channel = 'browser' AND started_at >= ?",
-            (now().date().isoformat(),)).fetchone()[0]
+        conn.execute("INSERT INTO usage (visitor, kind, created_at) VALUES (?, ?, ?)",
+                     (visitor, kind, now().isoformat()))
+
+
+def usage_today(kind: str, visitor: str | None = None) -> int:
+    sql = "SELECT COUNT(*) FROM usage WHERE kind = ? AND created_at >= ?"
+    args = [kind, now().date().isoformat()]
+    if visitor:
+        sql += " AND visitor = ?"
+        args.append(visitor)
+    with connect() as conn:
+        return conn.execute(sql, args).fetchone()[0]
 
 
 def recent_calls(limit: int = 20) -> list[sqlite3.Row]:
