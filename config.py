@@ -19,12 +19,15 @@ BUSINESS_NAME = _env("BUSINESS_NAME", "Smile Dental Clinic")
 AGENT_NAME = _env("AGENT_NAME", "Aria")
 TIMEZONE = ZoneInfo(_env("TIMEZONE", "Asia/Kolkata"))
 
-# --- AI (Claude) ---
+# --- AI ---
+# LLM_PROVIDER=anthropic (default, Claude) or groq (free tier, uses GROQ_API_KEY)
+LLM_PROVIDER = _env("LLM_PROVIDER", "anthropic").lower()
 CLAUDE_MODEL = _env("CLAUDE_MODEL", "claude-haiku-5-5")
 ANTHROPIC_API_KEY = _env("ANTHROPIC_API_KEY")
+GROQ_MODEL = _env("GROQ_MODEL", "openai/gpt-oss-20b")
 
 # --- Voice in the browser ---
-GROQ_API_KEY = _env("GROQ_API_KEY")          # speech-to-text (Whisper)
+GROQ_API_KEY = _env("GROQ_API_KEY")          # speech-to-text (Whisper), and the LLM when LLM_PROVIDER=groq
 TTS_VOICE = _env("TTS_VOICE", "en-IN-NeerjaNeural")  # text-to-speech (Edge-TTS, free)
 
 # --- Real phone calls (Twilio) ---
@@ -58,6 +61,10 @@ MAX_EMAILS_PER_HOUR = int(_env("MAX_EMAILS_PER_HOUR", "5"))
 DB_PATH = Path(_env("DB_PATH") or ROOT / "data" / "voicedesk.db")
 HOST = _env("HOST", "127.0.0.1")  # local only; set HOST=0.0.0.0 when hosting (e.g. in Docker)
 PORT = int(_env("PORT", "7860"))
+
+
+def model_name() -> str:
+    return f"{GROQ_MODEL} (Groq)" if LLM_PROVIDER == "groq" else CLAUDE_MODEL
 
 
 def phone_calls_enabled() -> bool:

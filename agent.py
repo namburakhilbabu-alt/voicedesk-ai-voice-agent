@@ -5,6 +5,7 @@ Receptionist  one conversation (phone or browser). Claude decides when to use to
 wrap_up()     after the call: summarize it, save it, and alert the owner only if it matters.
 """
 
+import logging
 import os
 import sys
 from contextlib import AsyncExitStack
@@ -86,11 +87,20 @@ class CallInsight(BaseModel):
     suggested_follow_up: str = Field(description="One concrete next step for the clinic, or 'None'")
 
 
-_claude_client: anthropic.AsyncAnthropic | None = None
+_claude_client = None
 
 
-def claude() -> anthropic.AsyncAnthropic:
+def claude():
+    """The LLM client: Claude by default, or the free Groq adapter when LLM_PROVIDER=groq.
+    Both offer the same messages.create / messages.parse calls."""
     global _claude_client
+    if config.LLM_PROVIDER == "groq":
+        if not config.GROQ_API_KEY:
+            raise RuntimeError("LLM_PROVIDER=groq needs GROQ_API_KEY. Add it to .env (see .env.example).")
+        if _claude_client is None:
+            from groq_llm import GroqClient
+            _claude_client = GroqClient(config.GROQ_API_KEY)
+        return _claude_client
     if not config.ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY is not set. Add it to .env (see .env.example).")
     if _claude_client is None:
@@ -235,15 +245,20 @@ async def wrap_up(conv: Receptionist) -> dict:
             alert_reason="Missed call-back: the customer asked to be called but didn't answer.",
             suggested_follow_up="Try calling again later or send a WhatsApp message.")
     else:
-        response = await claude().messages.parse(
-            model=config.CLAUDE_MODEL,
-            max_tokens=2048,
-            system=INSIGHT_PROMPT,
-            messages=[{"role": "user", "content": transcript_text(conv)}],
-            output_format=CallInsight,
-            output_config={"effort": "low"},
-        )
-        insight = response.parsed_output or CallInsight(
+        try:
+            response = await claude().messages.parse(
+                model=config.CLAUDE_MODEL,
+                max_tokens=2048,
+                system=INSIGHT_PROMPT,
+                messages=[{"role": "user", "content": transcript_text(conv)}],
+                output_format=CallInsight,
+                output_config={"effort": "low"},
+            )
+            parsed = response.parsed_output
+        except Exception:  # noqa: BLE001 - an LLM outage must not lose the call record
+            logging.getLogger("voicedesk.agent").exception("call summary failed")
+            parsed = None
+        insight = parsed or CallInsight(
             summary="Could not summarize this call.", caller_need="unknown", outcome="no_real_conversation",
             sentiment="neutral", lead_score="cold", alert_owner=False, alert_reason="",
             suggested_follow_up="Review the transcript.")

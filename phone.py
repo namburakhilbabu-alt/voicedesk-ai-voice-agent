@@ -31,6 +31,7 @@ PHONE_RE = re.compile(r"^\+\d{8,15}$")
 CALL_PROBLEMS = {"no-answer": "No answer. We'll let the clinic know.", "busy": "Your line was busy.",
                  "failed": "The call couldn't be connected.", "canceled": "The call was cancelled.",
                  "completed": "The call ended before the conversation started."}
+SORRY = "Sorry, I'm having a technical problem. The clinic team will call you back shortly. Goodbye!"
 
 
 def can_call(phone: str) -> tuple[bool, str]:
@@ -127,7 +128,13 @@ async def answer(request: Request, req: int):
     conv = Receptionist(toolbox, "phone", r["name"], r["phone"], r["email"] or "", r["reason"] or "", req)
     active_calls[form["CallSid"]] = conv
     db.set_call_request_status(req, "in_call", form["CallSid"])
-    return _say_and_listen(await conv.start())
+    try:
+        greeting = await conv.start()
+    except Exception:  # noqa: BLE001 - without this Twilio reads "an application error occurred"
+        log.exception("AI failed to start the call")
+        conv.ended = True
+        return _say_and_hang_up(SORRY)
+    return _say_and_listen(greeting)
 
 
 @router.post("/turn")
@@ -145,7 +152,12 @@ async def turn(request: Request):
             return _say_and_hang_up("I can't hear you, so I'll end the call. We'll reach out again. Goodbye!")
         return _say_and_listen("Sorry, I didn't catch that. Could you say it again?")
 
-    reply = await conv.reply(said)
+    try:
+        reply = await conv.reply(said)
+    except Exception:  # noqa: BLE001
+        log.exception("AI failed to reply")
+        conv.ended = True
+        return _say_and_hang_up(SORRY)
     return _say_and_hang_up(reply) if conv.ended else _say_and_listen(reply)
 
 

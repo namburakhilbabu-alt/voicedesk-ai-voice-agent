@@ -258,7 +258,7 @@ HOW_IT_WORKS = f"""
   Twilio speech-to-text         Groq Whisper speech-to-text
             \\                    /
              ▼                  ▼
-        🤖 Agent: Claude ({config.CLAUDE_MODEL})
+        🤖 Agent: LLM ({config.model_name()})
              │  decides which tool to use
              ▼   (Model Context Protocol)
         🔌 MCP server (mcp_server.py)
@@ -365,7 +365,7 @@ app.include_router(phone.router)
 @app.get("/health")
 def health():
     return {"ok": True, "phone_calls": config.phone_calls_enabled(), "voice_input": voice.stt_enabled(),
-            "model": config.CLAUDE_MODEL}
+            "model": config.model_name()}
 
 
 app = gr.mount_gradio_app(app, ui, path="/", theme=gr.themes.Soft(primary_hue="teal"), css=CSS)

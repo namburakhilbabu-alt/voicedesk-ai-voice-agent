@@ -148,6 +148,7 @@ The **browser call** uses the same brain and wrap-up. Only the voice changes: Gr
 ```
 ├── app.py            # web page, live tracker, browser call, owner dashboard, server startup
 ├── agent.py          # the brain: Claude + MCP client, conversation loop, call insights
+├── groq_llm.py       # optional free LLM (LLM_PROVIDER=groq), same interface as Claude
 ├── mcp_server.py     # the clinic's tools, served over MCP
 ├── phone.py          # Twilio: scheduling calls and handling webhooks
 ├── voice.py          # browser speech-to-text and text-to-speech
@@ -157,7 +158,8 @@ The **browser call** uses the same brain and wrap-up. Only the voice changes: Gr
 ├── faq.md            # clinic knowledge the agent answers from
 ├── Dockerfile        # container for Hugging Face Spaces or any Docker host
 └── tests/
-    └── test_flow.py  # end-to-end test with a scripted Claude (no keys needed)
+    ├── test_flow.py          # end-to-end test with a scripted Claude (no keys needed)
+    └── test_groq_adapter.py  # the free Groq provider with a fake Groq API
 ```
 
 ---
@@ -183,21 +185,23 @@ python -m venv .venv
 Run the end-to-end test (no keys needed):
 
 ```bash
-python tests/test_flow.py      # → ALL PASSED ✅
+python tests/test_flow.py           # → ALL PASSED ✅
+python tests/test_groq_adapter.py   # → ALL PASSED ✅
 ```
 
 ### 2. Configure
 
-Add your keys to `.env`. Only Anthropic is required; each other service switches on one feature.
+Add your keys to `.env`. You need one AI key: **Groq (free)** with `LLM_PROVIDER=groq`, or Anthropic for Claude.
+Each other service switches on one feature.
 
 | Service | Unlocks | Keys | Cost |
 |---|---|---|---|
-| [Anthropic](https://console.anthropic.com) | The AI (**required**) | `ANTHROPIC_API_KEY` | About $0.005 per call |
+| [Groq](https://console.groq.com) | The AI for free (`LLM_PROVIDER=groq`) **and** speaking in the browser call | `GROQ_API_KEY` | Free tier |
+| [Anthropic](https://console.anthropic.com) | The AI with Claude (default provider) | `ANTHROPIC_API_KEY` | About $0.005 per call |
 | [Twilio](https://www.twilio.com/try-twilio) | Real phone calls | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER` | Free trial credit |
 | [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) | Public URL so Twilio can reach the app | `PUBLIC_URL` | Free |
 | Telegram ([@BotFather](https://t.me/BotFather)) | Owner alerts | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Free |
 | [Gmail app password](https://myaccount.google.com/apppasswords) | Booking confirmation emails | `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD` | Free |
-| [Groq](https://console.groq.com) | Speaking in the browser call | `GROQ_API_KEY` | Free tier |
 
 <details>
 <summary><b>Setup steps for each service</b></summary>
@@ -225,7 +229,8 @@ API Keys → Create Key → `ANTHROPIC_API_KEY`.
 [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords), and set `GMAIL_ADDRESS` and
 `GMAIL_APP_PASSWORD`.
 
-**Groq:** sign up at [console.groq.com](https://console.groq.com) → API Keys → `GROQ_API_KEY`.
+**Groq:** sign up at [console.groq.com](https://console.groq.com) → API Keys → `GROQ_API_KEY`. Add
+`LLM_PROVIDER=groq` to run the receptionist on Groq's free `openai/gpt-oss-20b` (change it with `GROQ_MODEL`).
 
 </details>
 
@@ -266,27 +271,96 @@ claude mcp add voicedesk -- /full/path/to/.venv/bin/python /full/path/to/mcp_ser
 ```
 Then ask: *"What bookings do I have tomorrow?"* or *"Summarize today's calls."*
 
-### 5. Deploy to Hugging Face Spaces (optional)
+### 5. Host it for free (Hugging Face Spaces)
 
-A public Space gives you a shareable link and a permanent `PUBLIC_URL` for Twilio, so cloudflared isn't needed.
+**Where to host, and why not Streamlit?** Twilio has to reach the app over public HTTPS (`/twilio/answer`,
+`/twilio/turn`, `/twilio/status`) during every phone call, and the app runs a background loop that places the
+call-backs. Streamlit Community Cloud only serves a Streamlit page: it can't expose those webhook routes or keep
+a background loop alive, so the phone part can't run there. VoiceDesk is already a FastAPI + Gradio app with a
+Dockerfile, so a free **Hugging Face Space (Docker)** runs the whole thing: web page, browser call, owner
+dashboard, and Twilio webhooks, at one permanent URL.
 
-1. On [huggingface.co](https://huggingface.co) → **New Space** → SDK **Docker** → **Blank** → hardware **CPU basic** (free).
-2. **Files → Upload files:** upload everything from this repo **except `README.md`**. The Space keeps its own
-   README, which holds its settings.
-3. **Settings → Variables and secrets:**
-   - Add every key from `.env.example` as a **Secret**, not a Variable (Variables are visible to everyone).
-   - Add `PUBLIC_URL` = `https://<your-username>-<space-name>.hf.space`
-   - Optionally tune the demo limits (`MAX_BROWSER_CALLS_PER_DAY`, `MAX_PHONE_CALLS_PER_DAY`, …) as Variables.
-4. The Space builds and starts on its own. Open it and request a call.
+#### What it costs
 
-Free Spaces sleep after a period of inactivity, and bookings reset when the Space restarts.
+| Piece | Service | Free? |
+|---|---|---|
+| Hosting | Hugging Face Spaces, CPU basic | Free (sleeps after ~48 h without visitors; data resets on restart) |
+| AI brain | **Groq** with `LLM_PROVIDER=groq` | Free tier, no card (rate-limited: fine for a demo) |
+| AI brain (optional) | Claude Haiku via Anthropic | Paid, about a cent per call; set a spend limit |
+| Browser voice input | Groq Whisper (same `GROQ_API_KEY`) | Free tier |
+| Browser voice output | Edge-TTS | Free, no key |
+| Real phone calls | Twilio | Trial credit (about $15); trial calls only go to **verified** numbers and start with a short trial message |
+| Owner alerts | Telegram bot | Free |
+| Confirmation emails | Gmail app password | Free (free Spaces may block outgoing email; the booking still works) |
+
+The cheapest complete setup is **Groq + Edge-TTS + Telegram + Twilio trial = $0**.
+
+#### Step by step
+
+1. **Create the accounts (about 10 minutes)**
+   - [huggingface.co](https://huggingface.co): sign up (free).
+   - [console.groq.com](https://console.groq.com) → **API Keys** → *Create API key*. Copy it (`gsk_...`).
+   - *(For phone calls)* [twilio.com/try-twilio](https://www.twilio.com/try-twilio): sign up, verify your own
+     mobile, then in the Console copy the **Account SID** and **Auth Token**, and click **Get a phone number**.
+     Under **Phone Numbers → Verified Caller IDs** add every number you want the demo to call.
+     Under **Voice → Settings → Geo permissions** tick the country you are calling (e.g. India).
+   - *(For owner alerts)* In Telegram, message **@BotFather** → `/newbot` → copy the token. Send your new bot any
+     message, then open `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy `"chat":{"id": ...}`.
+
+2. **Create the Space:** Hugging Face → **New Space** → name it (e.g. `voicedesk`) → SDK **Docker** →
+   **Blank** → hardware **CPU basic (free)** → *Create Space*.
+
+3. **Upload the code:** in the Space, **Files → Add file → Upload files**, drag in everything from this repo
+   **except `README.md`** (the Space keeps its own README, which holds its settings) → *Commit*.
+   Or with git:
+   ```bash
+   git clone https://huggingface.co/spaces/<your-username>/voicedesk hf-space
+   cp -r agent.py app.py config.py db.py faq.md groq_llm.py mcp_server.py notify.py phone.py voice.py \
+         requirements.txt Dockerfile .dockerignore tests hf-space/
+   cd hf-space && git add . && git commit -m "Deploy VoiceDesk" && git push
+   ```
+   (When git asks for a password, use a Hugging Face **access token** with *write* permission from
+   Settings → Access Tokens.)
+
+4. **Add settings:** Space → **Settings → Variables and secrets**. Use **New secret** for keys (Secrets are
+   hidden; Variables are public):
+
+   | Name | Value | Type |
+   |---|---|---|
+   | `LLM_PROVIDER` | `groq` | Variable |
+   | `GROQ_API_KEY` | your `gsk_...` key | Secret |
+   | `PUBLIC_URL` | `https://<your-username>-voicedesk.hf.space` | Variable |
+   | `TWILIO_ACCOUNT_SID` | `AC...` | Secret |
+   | `TWILIO_AUTH_TOKEN` | Twilio auth token | Secret |
+   | `TWILIO_PHONE_NUMBER` | your Twilio number, e.g. `+15551234567` | Secret |
+   | `ALLOWED_PHONE_NUMBERS` | your verified number(s), comma-separated | Secret |
+   | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | from step 1 | Secret |
+
+   To use Claude instead, leave `LLM_PROVIDER` out and add `ANTHROPIC_API_KEY` as a Secret.
+   The exact Space URL is shown under the Space's **⋮ → Embed this Space → Direct URL**.
+
+5. **Wait for the build** (3-5 minutes, the status turns **Running**). Check
+   `https://<your-username>-voicedesk.hf.space/health`. It should show `"phone_calls": true` and the model name.
+
+6. **Twilio webhooks need no setup.** The app passes its own `PUBLIC_URL/twilio/...` addresses to Twilio with
+   every call it places, so you don't paste anything into the Twilio console.
+
+7. **Test it**
+   - **Browser call:** open the Space → enter a name → **🎧 Start call in browser** → allow the microphone →
+     record, or type.
+   - **Phone call:** enter your *verified* mobile → tick consent → **📞 Request a call back**. Your phone rings in
+     about 10 seconds (trial accounts first play a short Twilio message; press a key if asked).
+   - **Owner dashboard** tab: the booking, call log, and alert appear. Telegram gets hot-lead alerts.
+
+If something fails, open the Space's **Logs** tab; the troubleshooting table below covers the common errors.
 
 <details>
 <summary><b>🛠️ Troubleshooting</b></summary>
 
 | Problem | Fix |
 |---|---|
-| *"ANTHROPIC_API_KEY is not set"* | Keep `.env` next to `app.py` and restart the app after editing it |
+| *"ANTHROPIC_API_KEY is not set"* | Keep `.env` next to `app.py` and restart the app after editing it, or set `LLM_PROVIDER=groq` to use the free Groq model |
+| Groq *"rate limit"* errors | The free tier allows a limited number of tokens per minute; wait a minute, or set `GROQ_MODEL` to another Groq model |
 | Mic doesn't record | Open `http://localhost:7860` (not an IP address) and allow microphone access |
 | *"Phone calls are not set up"* | Set all three `TWILIO_*` values and `PUBLIC_URL`, then restart |
 | Twilio error about unverified numbers | Trial accounts can only call Verified Caller IDs |
